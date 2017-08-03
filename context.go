@@ -218,33 +218,42 @@ func (m *Context) determineZoomCenter() (int, s2.LatLng, error) {
 
 type transformer struct {
 	zoom               int
-	tileSize           int
-	pWidth, pHeight    int
-	pCenterX, pCenterY int
-	tCountX, tCountY   int
-	tCenterX, tCenterY float64
-	tOriginX, tOriginY int
+	numTiles           int     // number of tiles per dimension at this zoom level
+	tileSize           int     // tile size in pixels from this provider
+	pWidth, pHeight    int     // pixel size of returned set of tiles
+	pCenterX, pCenterY int     // pixel location of requested center in set of tiles
+	tCountX, tCountY   int     // download area in tile units
+	tCenterX, tCenterY float64 // tile index to requested center
+	tOriginX, tOriginY int     // bottom left tile to download
 	pMinX, pMaxX       int
 }
 
 func newTransformer(width int, height int, zoom int, llCenter s2.LatLng, tileSize int) *transformer {
-	t := new(transformer)
+	t = new(transformer)
+
 	t.zoom = zoom
+	t.numTiles = math.Exp2(float64(t.zoom))
 	t.tileSize = tileSize
+
+	// fractional tile index to center of requested area
 	t.tCenterX, t.tCenterY = t.ll2t(llCenter)
 
 	ww := float64(width) / float64(tileSize)
 	hh := float64(height) / float64(tileSize)
 
+	// origin tile to fulfill request
 	t.tOriginX = int(math.Floor(t.tCenterX - 0.5*ww))
 	t.tOriginY = int(math.Floor(t.tCenterY - 0.5*hh))
 
+	// tiles in each axis to fulfill request
 	t.tCountX = 1 + int(math.Floor(t.tCenterX+0.5*ww)) - t.tOriginX
 	t.tCountY = 1 + int(math.Floor(t.tCenterY+0.5*hh)) - t.tOriginY
 
+	// final pixel dimensions of area returned
 	t.pWidth = t.tCountX * tileSize
 	t.pHeight = t.tCountY * tileSize
 
+	// Pixel location in returned image for center of reqested area
 	t.pCenterX = int((t.tCenterX - float64(t.tOriginX)) * float64(tileSize))
 	t.pCenterY = int((t.tCenterY - float64(t.tOriginY)) * float64(tileSize))
 
@@ -255,9 +264,8 @@ func newTransformer(width int, height int, zoom int, llCenter s2.LatLng, tileSiz
 }
 
 func (t *transformer) ll2t(ll s2.LatLng) (float64, float64) {
-	tiles := math.Exp2(float64(t.zoom))
-	x := tiles * (ll.Lng.Degrees() + 180.0) / 360.0
-	y := tiles * (1 - math.Log(math.Tan(ll.Lat.Radians())+(1.0/math.Cos(ll.Lat.Radians())))/math.Pi) / 2.0
+	x := t.numTiles * (ll.Lng.Degrees() + 180.0) / 360.0
+	y := t.numTiles * (1 - math.Log(math.Tan(ll.Lat.Radians())+(1.0/math.Cos(ll.Lat.Radians())))/math.Pi) / 2.0
 	return x, y
 }
 
@@ -266,7 +274,7 @@ func (t *transformer) ll2p(ll s2.LatLng) (float64, float64) {
 	x = float64(t.pCenterX) + (x-t.tCenterX)*float64(t.tileSize)
 	y = float64(t.pCenterY) + (y-t.tCenterY)*float64(t.tileSize)
 
-	offset := math.Exp2(float64(t.zoom)) * float64(t.tileSize)
+	offset := t.numTiles * float64(t.tileSize)
 	if x < float64(t.pMinX) {
 		for x < float64(t.pMinX) {
 			x = x + offset
@@ -277,6 +285,16 @@ func (t *transformer) ll2p(ll s2.LatLng) (float64, float64) {
 		}
 	}
 	return x, y
+}
+
+// Rect returns an s2.Rect around the set of tiles described by transformer
+func (t *transformer) Rect() (bbox s2.Rect) {
+	n := math.Pi - 2.0*math.Pi*float64(t.OriginY)/t.numTiles
+	bbox.Lat.Hi = math.Atan(0.5 * (math.Exp(n) - math.Exp(-n)))
+	n = math.Pi - 2.0*math.Pi*float64(t.OriginY+t.CountY)/t.numTiles
+	bbox.Lat.Lo = math.Atan(0.5 * (math.Exp(n) - math.Exp(-n)))
+	bbox.Lng.Lo = float64(t.tOriginX)/float64(t.numTiles)*2.0*math.Pi - math.Pi
+	bbox.Lng.Hi = float64(t.tOriginX+t.CountX)/float64(t.numTiles)*2.0*math.Pi - math.Pi
 }
 
 // Render actually renders the map image including all map objects (markers, paths, areas)
@@ -353,4 +371,81 @@ func (m *Context) Render() (image.Image, error) {
 	gc.DrawString(m.tileProvider.Attribution, 4.0, float64(m.height)-4.0)
 
 	return croppedImg, nil
+}
+
+// Render actually renders the map image including all map objects (markers, paths, areas)
+// returns image and actual area rendered which may exceed requested coverage due to tiling
+func (m *Context) RenderWithBounds() (image.Image, s2.Rect, error) {
+	zoom, center, err := m.determineZoomCenter()
+	if err != nil {
+		return nil, err
+	}
+
+	tileSize := m.tileProvider.TileSize
+	trans := newTransformer(m.width, m.height, zoom, center, tileSize)
+	img := image.NewRGBA(image.Rect(0, 0, trans.pWidth, trans.pHeight))
+	gc := gg.NewContextForRGBA(img)
+	if m.background != nil {
+		draw.Draw(img, img.Bounds(), &image.Uniform{m.background}, image.ZP, draw.Src)
+	}
+
+	// fetch and draw tiles to img
+	t := NewTileFetcher(m.tileProvider)
+	if m.userAgent != "" {
+		t.SetUserAgent(m.userAgent)
+	}
+
+	tiles := (1 << uint(zoom))
+	for xx := 0; xx < trans.tCountX; xx++ {
+		x := trans.tOriginX + xx
+		if x < 0 {
+			x = x + tiles
+		} else if x >= tiles {
+			x = x - tiles
+		}
+		for yy := 0; yy < trans.tCountY; yy++ {
+			y := trans.tOriginY + yy
+			if y < 0 || y >= tiles {
+				log.Printf("Skipping out of bounds tile %d/%d", x, y)
+			} else {
+				if tileImg, err := t.Fetch(zoom, x, y); err == nil {
+					gc.DrawImage(tileImg, xx*tileSize, yy*tileSize)
+				} else {
+					log.Printf("Error downloading tile file: %s", err)
+				}
+			}
+		}
+	}
+
+	// draw map objects
+	for _, area := range m.areas {
+		area.draw(gc, trans)
+	}
+	for _, path := range m.paths {
+		path.draw(gc, trans)
+	}
+	for _, marker := range m.markers {
+		marker.draw(gc, trans)
+	}
+
+	// crop image
+	croppedImg := image.NewRGBA(image.Rect(0, 0, int(m.width), int(m.height)))
+	draw.Draw(croppedImg, image.Rect(0, 0, int(m.width), int(m.height)),
+		img, image.Point{trans.pCenterX - int(m.width)/2, trans.pCenterY - int(m.height)/2},
+		draw.Src)
+
+	// draw attribution
+	if m.tileProvider.Attribution == "" {
+		return croppedImg, nil
+	}
+	_, textHeight := gc.MeasureString(m.tileProvider.Attribution)
+	boxHeight := textHeight + 4.0
+	gc = gg.NewContextForRGBA(croppedImg)
+	gc.SetRGBA(0.0, 0.0, 0.0, 0.5)
+	gc.DrawRectangle(0.0, float64(m.height)-boxHeight, float64(m.width), boxHeight)
+	gc.Fill()
+	gc.SetRGBA(1.0, 1.0, 1.0, 0.75)
+	gc.DrawString(m.tileProvider.Attribution, 4.0, float64(m.height)-4.0)
+
+	return croppedImg, trans.Rect(), nil
 }
