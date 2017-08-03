@@ -218,7 +218,7 @@ func (m *Context) determineZoomCenter() (int, s2.LatLng, error) {
 
 type transformer struct {
 	zoom               int
-	numTiles           int     // number of tiles per dimension at this zoom level
+	numTiles           float64 // number of tiles per dimension at this zoom level
 	tileSize           int     // tile size in pixels from this provider
 	pWidth, pHeight    int     // pixel size of returned set of tiles
 	pCenterX, pCenterY int     // pixel location of requested center in set of tiles
@@ -229,7 +229,7 @@ type transformer struct {
 }
 
 func newTransformer(width int, height int, zoom int, llCenter s2.LatLng, tileSize int) *transformer {
-	t = new(transformer)
+	t := new(transformer)
 
 	t.zoom = zoom
 	t.numTiles = math.Exp2(float64(t.zoom))
@@ -289,12 +289,14 @@ func (t *transformer) ll2p(ll s2.LatLng) (float64, float64) {
 
 // Rect returns an s2.Rect around the set of tiles described by transformer
 func (t *transformer) Rect() (bbox s2.Rect) {
-	n := math.Pi - 2.0*math.Pi*float64(t.OriginY)/t.numTiles
+	invNumTiles := 1.0 / t.numTiles
+	n := math.Pi - 2.0*math.Pi*float64(t.tOriginY)*invNumTiles
 	bbox.Lat.Hi = math.Atan(0.5 * (math.Exp(n) - math.Exp(-n)))
-	n = math.Pi - 2.0*math.Pi*float64(t.OriginY+t.CountY)/t.numTiles
+	n = math.Pi - 2.0*math.Pi*float64(t.tOriginY+t.tCountY)*invNumTiles
 	bbox.Lat.Lo = math.Atan(0.5 * (math.Exp(n) - math.Exp(-n)))
-	bbox.Lng.Lo = float64(t.tOriginX)/float64(t.numTiles)*2.0*math.Pi - math.Pi
-	bbox.Lng.Hi = float64(t.tOriginX+t.CountX)/float64(t.numTiles)*2.0*math.Pi - math.Pi
+	bbox.Lng.Lo = float64(t.tOriginX)*invNumTiles*2.0*math.Pi - math.Pi
+	bbox.Lng.Hi = float64(t.tOriginX+t.tCountX)*invNumTiles*2.0*math.Pi - math.Pi
+	return bbox
 }
 
 // Render actually renders the map image including all map objects (markers, paths, areas)
@@ -378,7 +380,7 @@ func (m *Context) Render() (image.Image, error) {
 func (m *Context) RenderWithBounds() (image.Image, s2.Rect, error) {
 	zoom, center, err := m.determineZoomCenter()
 	if err != nil {
-		return nil, err
+		return nil, s2.Rect{}, err
 	}
 
 	tileSize := m.tileProvider.TileSize
@@ -436,7 +438,7 @@ func (m *Context) RenderWithBounds() (image.Image, s2.Rect, error) {
 
 	// draw attribution
 	if m.tileProvider.Attribution == "" {
-		return croppedImg, nil
+		return croppedImg, trans.Rect(), nil
 	}
 	_, textHeight := gc.MeasureString(m.tileProvider.Attribution)
 	boxHeight := textHeight + 4.0
