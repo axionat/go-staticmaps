@@ -430,8 +430,6 @@ func (m *Context) RenderWithBounds() (image.Image, s2.Rect, error) {
 		marker.draw(gc, trans)
 	}
 
-	// crop image
-
 	// draw attribution
 	if m.tileProvider.Attribution == "" {
 		return img, trans.Rect(), nil
