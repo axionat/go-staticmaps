@@ -431,23 +431,18 @@ func (m *Context) RenderWithBounds() (image.Image, s2.Rect, error) {
 	}
 
 	// crop image
-	croppedImg := image.NewRGBA(image.Rect(0, 0, int(m.width), int(m.height)))
-	draw.Draw(croppedImg, image.Rect(0, 0, int(m.width), int(m.height)),
-		img, image.Point{trans.pCenterX - int(m.width)/2, trans.pCenterY - int(m.height)/2},
-		draw.Src)
 
 	// draw attribution
 	if m.tileProvider.Attribution == "" {
-		return croppedImg, trans.Rect(), nil
+		return img, trans.Rect(), nil
 	}
 	_, textHeight := gc.MeasureString(m.tileProvider.Attribution)
 	boxHeight := textHeight + 4.0
-	gc = gg.NewContextForRGBA(croppedImg)
 	gc.SetRGBA(0.0, 0.0, 0.0, 0.5)
 	gc.DrawRectangle(0.0, float64(m.height)-boxHeight, float64(m.width), boxHeight)
 	gc.Fill()
 	gc.SetRGBA(1.0, 1.0, 1.0, 0.75)
 	gc.DrawString(m.tileProvider.Attribution, 4.0, float64(m.height)-4.0)
 
-	return croppedImg, trans.Rect(), nil
+	return img, trans.Rect(), nil
 }
