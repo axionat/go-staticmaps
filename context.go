@@ -437,7 +437,7 @@ func (m *Context) RenderWithBounds() (image.Image, s2.Rect, error) {
 	_, textHeight := gc.MeasureString(m.tileProvider.Attribution)
 	boxHeight := textHeight + 4.0
 	gc.SetRGBA(0.0, 0.0, 0.0, 0.5)
-	gc.DrawRectangle(0.0, float64(m.height)-boxHeight, float64(m.width), boxHeight)
+	gc.DrawRectangle(0.0, float64(trans.pHeight)-boxHeight, float64(trans.pWidth), boxHeight)
 	gc.Fill()
 	gc.SetRGBA(1.0, 1.0, 1.0, 0.75)
 	gc.DrawString(m.tileProvider.Attribution, 4.0, float64(m.height)-4.0)
